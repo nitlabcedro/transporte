@@ -137,6 +137,8 @@ export default function App() {
   const [filterStartDate, setFilterStartDate] = useState("");
   const [filterEndDate, setFilterEndDate] = useState("");
   const [filterPlate, setFilterPlate] = useState("");
+  const [filterMonth, setFilterMonth] = useState("");
+  const [filterYear, setFilterYear] = useState("");
   const [currentStep, setCurrentStep] = useState<'upload' | 'view' | 'dashboard'>('upload');
   const [isSaving, setIsSaving] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -593,28 +595,51 @@ export default function App() {
       const line = lines[idx];
       const norm = normalizeText(line);
       
-      // Look for Plate
-      const plateMatch = line.match(/\b([A-Z]{3}-?[0-9][A-Z0-9][0-9]{2})\b/i);
+      // Look for Plate - More robust regex supporting spaces and various formats
+      const plateMatch = line.match(/\b([A-Z]{3}[-\s]?[0-9][A-Z0-9][0-9]{2})\b/i);
       if (plateMatch && !summary.placa) {
-        summary.placa = plateMatch[1].toUpperCase().replace("-", "").replace(/\s+/g, "");
+        summary.placa = plateMatch[1].toUpperCase().replace(/[-\s]/g, "");
       }
 
       // Look for Brand/Model - Check if the line contains vehicle info
-      if ((norm.includes("placa") || norm.includes("marca") || norm.includes("modelo")) && idx + 1 < lines.length) {
+      if ((norm.includes("placa") || norm.includes("marca") || norm.includes("modelo") || norm.includes("veiculo")) && idx + 1 < lines.length) {
         const nextLine = lines[idx + 1];
         const nextNorm = normalizeText(nextLine);
         
-        // Skip header lines that might follow
-        if (!nextNorm.includes("chassi") && !nextNorm.includes("kilometragem")) {
-           // Try to extract brand and model if we haven't yet
-           if (!summary.marca) {
-             const brandMatch = nextLine.match(/\b(HONDA|YAMAHA|SUZUKI|DAFRA|BMW|KAWASAKI|SHINERAY|VOLKSWAGEN|FIAT|FORD|CHEVROLET|TOYOTA|HYUNDAI|RENAULT)\b/i);
-             if (brandMatch) summary.marca = brandMatch[1].toUpperCase();
-           }
+        // Try to extract brand and model if we haven't yet
+        if (!summary.marca) {
+          // 1. Look for common brands (Predefined list for accuracy)
+          const brandMatch = nextLine.match(/\b(HONDA|YAMAHA|SUZUKI|DAFRA|BMW|KAWASAKI|SHINERAY|VOLKSWAGEN|FIAT|FORD|CHEVROLET|TOYOTA|HYUNDAI|RENAULT|TRIUMPH|HARLEY|DUCATI|KTM|JAFRA|HAOJUE|ROYAL ENFIELD|BENELLI|VESPA|PIAGGIO|KASINSKI)\b/i);
+          if (brandMatch) {
+            summary.marca = brandMatch[1].toUpperCase();
+          } else {
+            // 2. Look for "Marca:" label (Automatic detection for any brand)
+            const genericBrandMatch = nextLine.match(/marca[:\s]+([A-Z0-9]+)/i);
+            if (genericBrandMatch) summary.marca = genericBrandMatch[1].toUpperCase();
+          }
+        }
+        
+        // If it's a vehicle info line, try to grab model
+        if (!summary.modelo && nextLine.length > 5 && !nextNorm.includes("chassi") && !nextNorm.includes("km")) {
+          // If brand was found, the rest might be the model
+          if (summary.marca && nextNorm.includes(summary.marca.toLowerCase())) {
+             summary.modelo = nextLine.replace(new RegExp(summary.marca, "i"), "").trim();
+          } else {
+             // Take text after plates or vehicle labels
+             summary.modelo = nextLine.trim().split(/\s{2,}/)[0];
+          }
         }
       }
 
-      if (norm.includes("placa chassi montadora modelo") && idx + 1 < lines.length) {
+      if (norm.includes("marca:") || (norm.includes("modelo:") && !summary.modelo)) {
+        const parts = line.split(/[:\s]+/).slice(1);
+        if (parts.length > 0) {
+          if (norm.includes("marca")) summary.marca = parts[0].toUpperCase();
+          else summary.modelo = parts.join(" ");
+        }
+      }
+
+      if ((norm.includes("placa chassi montadora modelo") || norm.includes("veiculo")) && idx + 1 < lines.length) {
         const combined = lines[idx + 1];
         // More loose regex for KM and Brand/Model
         const match = combined.match(/(?:(?:KM|KM:)[-\s]*(\d+))?\s*([A-Z]{2,})\s+(.+)$/i);
@@ -625,12 +650,11 @@ export default function App() {
         }
       } 
       
-      // Fallback searches
+      // Fallback searches for KM
       if (!summary.km && (norm.includes("km") || norm.includes("kilometragem"))) {
         const kms = line.match(/\b(\d+)\b/);
         if (kms && kms[1].length >= 1) summary.km = kms[1];
       }
-
       if (norm === "observacoes" && idx + 1 < lines.length) {
         const obs = lines[idx + 1].trim();
         if (!normalizeText(obs).includes("avarias") && !normalizeText(obs).includes("produtos")) {
@@ -639,22 +663,25 @@ export default function App() {
       }
     }
 
-    // Fallback: search for explicit labels like "Modelo: [Name]"
+    // Fallback: search for explicit labels like "Modelo: [Name]" or "Veículo: [Name]"
     if (!summary.modelo) {
-      for (const line of lines.slice(0, 20)) {
+      for (const line of lines.slice(0, 30)) {
         const lowerLine = line.toLowerCase();
-        if (lowerLine.includes("modelo:")) {
-          const parts = line.split(/modelo:/i);
+        if (lowerLine.includes("modelo:") || lowerLine.includes("veiculo:")) {
+          const parts = line.split(/(?:modelo:|veiculo:)/i);
           if (parts.length > 1) {
-            summary.modelo = parts[1].trim().split(/\s{2,}/)[0]; // Take only until next large space
+            summary.modelo = parts[1].trim().split(/\s{2,}/)[0];
             break;
           }
         }
       }
     }
 
-    if (summary.placa || summary.modelo) {
-      summary.moto = [summary.placa, summary.modelo].filter(Boolean).join(" ");
+    if (summary.placa || summary.modelo || summary.marca) {
+      summary.moto = [summary.placa, summary.marca, summary.modelo]
+        .filter(Boolean)
+        .filter((val, idx, self) => self.indexOf(val) === idx) // Remove duplicates
+        .join(" ");
     }
 
     // Totals
@@ -996,7 +1023,6 @@ export default function App() {
     if (filterStartDate || filterEndDate) {
       result = result.filter(row => {
         if (!row.data) return false;
-        // Parse dd/mm/yyyy to Date object
         const parts = row.data.split('/');
         if (parts.length !== 3) return false;
         const rowDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
@@ -1013,19 +1039,37 @@ export default function App() {
       });
     }
 
+    // Month filter
+    if (filterMonth) {
+      result = result.filter(row => {
+        if (!row.data) return false;
+        const parts = row.data.split('/');
+        return parts.length === 3 && parts[1] === filterMonth;
+      });
+    }
+
+    // Year filter
+    if (filterYear) {
+      result = result.filter(row => {
+        if (!row.data) return false;
+        const parts = row.data.split('/');
+        return parts.length === 3 && parts[2] === filterYear;
+      });
+    }
+
     return result;
-  }, [extractedData, searchQuery, filterPlate, filterStartDate, filterEndDate]);
+  }, [extractedData, searchQuery, filterPlate, filterStartDate, filterEndDate, filterMonth, filterYear]);
 
   // --- DASHBOARD DATA PROCESSING ---
   const dashboardData = useMemo(() => {
-    if (extractedData.length === 0) return null;
+    if (filteredData.length === 0) return null;
 
     // 1. Total Spending
-    const totalSpending = extractedData.reduce((acc, row) => acc + parseFloat(row.preco_total || '0'), 0);
+    const totalSpending = filteredData.reduce((acc, row) => acc + parseFloat(row.preco_total || '0'), 0);
 
     // 2. Monthly Spending
     const monthlyMap: { [key: string]: number } = {};
-    extractedData.forEach(row => {
+    filteredData.forEach(row => {
       if (!row.data) return;
       const parts = row.data.split('/');
       if (parts.length === 3) {
@@ -1043,7 +1087,7 @@ export default function App() {
 
     // 3. Top Pieces (Most Bought by Quantity)
     const piecesMap: { [key: string]: { qty: number, total: number } } = {};
-    extractedData.forEach(row => {
+    filteredData.forEach(row => {
       const name = cleanupProductName(row.peca).toUpperCase();
       if (!name || name === "MAO DE OBRA") return;
       if (!piecesMap[name]) piecesMap[name] = { qty: 0, total: 0 };
@@ -1064,7 +1108,7 @@ export default function App() {
       'Elétrica': 0,
       'Outros': 0
     };
-    extractedData.forEach(row => {
+    filteredData.forEach(row => {
       const p = normalizeText(row.peca);
       const val = parseFloat(row.preco_total || '0');
       if (p.includes('pneu') || p.includes('camera')) maintenanceMap['Pneus'] += val;
@@ -1081,7 +1125,7 @@ export default function App() {
 
     // 5. Brands Spending
     const brandsMap: { [key: string]: number } = {};
-    extractedData.forEach(row => {
+    filteredData.forEach(row => {
       const brand = row.marca || "OUTROS";
       brandsMap[brand] = (brandsMap[brand] || 0) + parseFloat(row.preco_total || '0');
     });
@@ -1091,7 +1135,7 @@ export default function App() {
 
     // 6. Models Spending (Top 5 Models by total cost)
     const modelsMap: { [key: string]: number } = {};
-    extractedData.forEach(row => {
+    filteredData.forEach(row => {
       if (!row.modelo || row.modelo === "EMPTY") return;
       const modelName = row.modelo.toUpperCase();
       modelsMap[modelName] = (modelsMap[modelName] || 0) + parseFloat(row.preco_total || '0');
@@ -1108,10 +1152,10 @@ export default function App() {
       maintenanceData,
       brandsData,
       modelsData,
-      countOS: new Set(extractedData.filter(d => d.os).map(d => d.os)).size,
-      countItems: extractedData.length
+      countOS: new Set(filteredData.filter(d => d.os).map(d => d.os)).size,
+      countItems: filteredData.length
     };
-  }, [extractedData]);
+  }, [filteredData]);
 
   const exportAllSupabaseData = async () => {
     if (!supabase) return;
@@ -1492,23 +1536,111 @@ NOTIFY pgrst, 'reload schema';`;
               animate={{ opacity: 1, scale: 1 }}
               className="space-y-12"
             >
-              <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-                <div className="space-y-3">
-                  <h2 className="text-4xl font-black text-text-main">Gestão Estratégica</h2>
+              <div className="flex flex-col gap-8">
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                  <div className="space-y-3">
+                    <h2 className="text-4xl font-black text-text-main">Gestão Estratégica</h2>
+                  </div>
+                  <div className="flex gap-4">
+                    <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center min-w-[120px]">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ordens processadas</p>
+                        <p className="text-2xl font-black text-brand-primary">{dashboardData?.countOS || 0}</p>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center min-w-[120px]">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total de Itens Extraídos</p>
+                        <p className="text-2xl font-black text-brand-primary">{dashboardData?.countItems || 0}</p>
+                    </div>
+                    <div className="bg-brand-primary p-4 rounded-2xl text-center min-w-[160px] shadow-lg shadow-brand-primary/20">
+                        <p className="text-[10px] font-black text-white/60 uppercase tracking-widest">Investimento Total</p>
+                        <p className="text-2xl font-black text-white">R$ {dashboardData?.totalSpending?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex gap-4">
-                   <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center min-w-[120px]">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ordens processadas</p>
-                      <p className="text-2xl font-black text-brand-primary">{dashboardData?.countOS || 0}</p>
-                   </div>
-                   <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center min-w-[120px]">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total de Itens Extraídos</p>
-                      <p className="text-2xl font-black text-brand-primary">{dashboardData?.countItems || 0}</p>
-                   </div>
-                   <div className="bg-brand-primary p-4 rounded-2xl text-center min-w-[160px] shadow-lg shadow-brand-primary/20">
-                      <p className="text-[10px] font-black text-white/60 uppercase tracking-widest">Investimento Total</p>
-                      <p className="text-2xl font-black text-white">R$ {dashboardData?.totalSpending?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
-                   </div>
+
+                {/* Dashboard Filters */}
+                <div className="bg-white border border-slate-100 p-6 rounded-[2rem] shadow-sm flex flex-wrap items-center gap-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
+                      <Search size={18} />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Filtrar por Placa</p>
+                      <input 
+                        type="text"
+                        placeholder="ABC-1234..."
+                        value={filterPlate}
+                        onChange={(e) => setFilterPlate(e.target.value)}
+                        className="bg-transparent border-none p-0 focus:ring-0 text-sm font-bold text-text-main placeholder:text-slate-200 w-32"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="h-10 w-px bg-slate-100" />
+
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
+                      <Calendar size={18} />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Filtrar por Mês</p>
+                      <select 
+                        value={filterMonth}
+                        onChange={(e) => setFilterMonth(e.target.value)}
+                        className="bg-transparent border-none p-0 focus:ring-0 text-sm font-bold text-text-main appearance-none cursor-pointer pr-6"
+                      >
+                        <option value="">Todos os Meses</option>
+                        <option value="01">Janeiro</option>
+                        <option value="02">Fevereiro</option>
+                        <option value="03">Março</option>
+                        <option value="04">Abril</option>
+                        <option value="05">Maio</option>
+                        <option value="06">Junho</option>
+                        <option value="07">Julho</option>
+                        <option value="08">Agosto</option>
+                        <option value="09">Setembro</option>
+                        <option value="10">Outubro</option>
+                        <option value="11">Novembro</option>
+                        <option value="12">Dezembro</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="h-10 w-px bg-slate-100" />
+
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
+                      <Activity size={18} />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Filtrar por Ano</p>
+                      <select 
+                        value={filterYear}
+                        onChange={(e) => setFilterYear(e.target.value)}
+                        className="bg-transparent border-none p-0 focus:ring-0 text-sm font-bold text-text-main appearance-none cursor-pointer pr-6"
+                      >
+                        <option value="">Todos os Anos</option>
+                        {Array.from(new Set(extractedData.map(d => {
+                          const p = d.data?.split('/');
+                          return p && p.length === 3 ? p[2] : null;
+                        }).filter(Boolean))).sort().map(year => (
+                          <option key={year} value={year || ''}>{year}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {(filterPlate || filterMonth || filterYear) && (
+                    <button 
+                      onClick={() => {
+                        setFilterPlate("");
+                        setFilterMonth("");
+                        setFilterYear("");
+                      }}
+                      className="ml-auto text-[10px] font-black text-red-500 uppercase tracking-widest hover:bg-red-50 px-4 py-2 rounded-xl transition-all"
+                    >
+                      Limpar Filtros
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1791,31 +1923,19 @@ NOTIFY pgrst, 'reload schema';`;
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-                <div className="bg-brand-primary text-white p-6 rounded-[2rem] space-y-4 shadow-xl shadow-brand-primary/20">
-                  <h3 className="text-[10px] font-black text-white/60 uppercase tracking-[0.3em]">Eficiência de Extração</h3>
-                  <div className="flex items-end gap-2">
-                    <span className="text-4xl font-black">100</span>
-                    <span className="text-white/40 text-sm mb-1.5 font-bold">%</span>
-                  </div>
-                  <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden">
-                    <div className="w-full h-full bg-brand-accent rounded-full" />
-                  </div>
+              <div className="flex flex-wrap gap-4 mb-8">
+                <div className="bg-white border border-slate-200 p-6 rounded-3xl text-center min-w-[200px] shadow-sm">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Ordens Processadas</p>
+                  <p className="text-3xl font-black text-brand-primary">{dashboardData?.countOS || 0}</p>
                 </div>
-                {summaries.slice(0, 3).map((s, i) => (
-                  <div key={i} className="bg-white border border-border p-6 rounded-[2rem] space-y-4 hover:border-brand-primary/40 transition-colors group">
-                    <h3 className="text-[10px] font-black text-text-muted uppercase tracking-[0.2em] truncate group-hover:text-brand-primary transition-colors">{s.arquivo_pdf}</h3>
-                    <div className="flex justify-between items-end">
-                      <div>
-                        <p className="text-[9px] text-text-muted font-black uppercase tracking-widest mb-1">Total Documento</p>
-                        <p className="text-2xl font-black text-text-main leading-tight">R$ {s.total_geral || '0,00'}</p>
-                      </div>
-                      <span className="text-[10px] bg-brand-primary text-white px-3 py-1.5 rounded-full font-black uppercase tracking-widest shadow-md shadow-brand-primary/10">
-                        {s.itens_extraidos}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+                <div className="bg-white border border-slate-200 p-6 rounded-3xl text-center min-w-[200px] shadow-sm">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Total de Itens Extraídos</p>
+                  <p className="text-3xl font-black text-brand-primary">{dashboardData?.countItems || 0}</p>
+                </div>
+                <div className="bg-brand-primary p-6 rounded-3xl text-center min-w-[250px] shadow-xl shadow-brand-primary/20">
+                  <p className="text-[10px] font-black text-white/60 uppercase tracking-widest mb-2">Investimento Total</p>
+                  <p className="text-3xl font-black text-white">R$ {dashboardData?.totalSpending?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                </div>
               </div>
 
               <div className="bg-white border border-border rounded-[2.5rem] shadow-xl shadow-slate-100/50 overflow-hidden">
