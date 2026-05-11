@@ -12,13 +12,25 @@
   --color-text-main: #111111;
   --color-text-muted: #666666;
   --color-border: #E8E7E7;
+  
+  --bg-pattern: none;
+  --mesh-gradient: 
+    radial-gradient(at 0% 0%, hsla(133, 85%, 20%, 0.03) 0px, transparent 50%),
+    radial-gradient(at 50% 0%, hsla(210, 20%, 98%, 1) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, hsla(133, 85%, 20%, 0.03) 0px, transparent 50%),
+    radial-gradient(at 50% 100%, hsla(133, 85%, 20%, 0.02) 0px, transparent 50%);
 }
 
 @layer base {
   body {
-    @apply font-sans antialiased bg-background text-text-main;
+    @apply font-sans antialiased text-text-main;
+    background-color: #fcfdfc;
+    background-image: var(--mesh-gradient);
+    background-attachment: fixed;
   }
 }
+
+/* .tech-grid removed */
 
 @layer components {
   .card-cedro {
