@@ -22,11 +22,15 @@ import {
   BarChart2,
   PieChart as PieChartIcon,
   Activity,
-  Calendar
+  Calendar,
+  ChevronDown,
+  LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as PDFJS from 'pdfjs-dist';
 import * as XLSX from 'xlsx-js-style';
+import Auth from './Auth';
+import ProfileSidebar from './ProfileSidebar';
 import { 
   BarChart, 
   Bar, 
@@ -46,7 +50,7 @@ import {
 } from 'recharts';
 import { cn } from './lib/utils';
 import { supabase } from './lib/supabase';
-import { Database, Save, Cloud } from 'lucide-react';
+import { Database, Save, Cloud, Truck } from 'lucide-react';
 
 // Set worker for pdfjs using unpkg as a reliable CDN for the specific version
 const PDFJS_VERSION = PDFJS.version;
@@ -140,6 +144,8 @@ export default function App() {
   const [filterMonth, setFilterMonth] = useState("");
   const [filterYear, setFilterYear] = useState("");
   const [currentStep, setCurrentStep] = useState<'upload' | 'view' | 'dashboard'>('upload');
+  const [user, setUser] = useState<any>(null);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -147,14 +153,31 @@ export default function App() {
   const [configError, setConfigError] = useState(false);
   const [dbStatus, setDbStatus] = useState<'connected' | 'error' | 'disconnected'>('disconnected');
 
-  // Fetch data on mount
+  // Auth session handling
+  useEffect(() => {
+    if (!supabase) return;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Fetch data on mount when user is authenticated
   useEffect(() => {
     if (!supabase) {
       setConfigError(true);
     }
     checkConnection();
-    fetchFromSupabase();
-  }, []);
+    if (user) {
+      fetchFromSupabase();
+    }
+  }, [user]);
 
   const checkConnection = async () => {
     if (!supabase) {
@@ -183,9 +206,11 @@ export default function App() {
     if (!supabase) return;
     setIsLoading(true);
     try {
+      if (!user) return;
       const { data, error } = await supabase
         .from('extracted_data')
         .select('*')
+        .or(`user_id.eq.${user.id},user_id.is.null`)
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -246,12 +271,13 @@ export default function App() {
     }));
 
     // If the row has an ID, update Supabase directly
-    if (rowToUpdate.id && supabase) {
+    if (rowToUpdate.id && supabase && user) {
       try {
         const { error } = await supabase
           .from('extracted_data')
-          .update({ [field]: value })
-          .eq('id', rowToUpdate.id);
+          .update({ [field]: value, user_id: user.id })
+          .eq('id', rowToUpdate.id)
+          .or(`user_id.eq.${user.id},user_id.is.null`);
 
         if (error) throw error;
       } catch (error) {
@@ -364,12 +390,13 @@ export default function App() {
   const deleteRow = async (rowToDelete: ExtractedRow) => {
     if (!window.confirm("Tem certeza que deseja excluir esta linha permanentemente?")) return;
 
-    if (rowToDelete.id && supabase) {
+    if (rowToDelete.id && supabase && user) {
       try {
         const { error } = await supabase
           .from('extracted_data')
           .delete()
-          .eq('id', rowToDelete.id);
+          .eq('id', rowToDelete.id)
+          .or(`user_id.eq.${user.id},user_id.is.null`);
         
         if (error) throw error;
       } catch (error) {
@@ -514,6 +541,7 @@ export default function App() {
 
           if (newRowsToSave.length > 0) {
             const rowsToInsert = newRowsToSave.map(d => ({
+              user_id: user.id,
               moto: d.moto,
               peca: d.peca,
               codigo: d.codigo,
@@ -1193,7 +1221,9 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-white text-text-main font-sans selection:bg-brand-primary/10">
+    <div className="min-h-screen bg-white text-text-main font-sans selection:bg-brand-primary/10 relative">
+      {/* Background is now pure white */}
+
       {/* Header */}
       <header className="border-b border-border bg-white sticky top-0 z-10 shadow-sm">
         <div className="max-w-7xl mx-auto px-8 h-20 flex items-center justify-between">
@@ -1207,77 +1237,101 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-6">
-            <div className="flex items-center gap-4">
-              <button 
-                onClick={() => setCurrentStep('upload')}
-                className={cn(
-                  "text-xs font-bold flex items-center gap-2 transition-colors uppercase tracking-widest px-4 py-2 rounded-lg",
-                  currentStep === 'upload' ? "bg-brand-primary/10 text-brand-primary" : "text-text-muted hover:text-brand-primary"
-                )}
-              >
-                <Plus size={16} /> Novo Lote
-              </button>
-              <button 
-                onClick={() => setCurrentStep('view')}
-                className={cn(
-                  "text-xs font-bold flex items-center gap-2 transition-colors uppercase tracking-widest px-4 py-2 rounded-lg",
-                  currentStep === 'view' ? "bg-brand-primary/10 text-brand-primary" : "text-text-muted hover:text-brand-primary"
-                )}
-              >
-                <Database size={16} /> Base de Dados
-              </button>
-              <button 
-                onClick={() => setCurrentStep('dashboard')}
-                className={cn(
-                  "text-xs font-bold flex items-center gap-2 transition-colors uppercase tracking-widest px-4 py-2 rounded-lg",
-                  currentStep === 'dashboard' ? "bg-brand-primary/10 text-brand-primary" : "text-text-muted hover:text-brand-primary"
-                )}
-              >
-                <BarChart2 size={16} /> Dashboard
-              </button>
-            </div>
-            <div className="h-8 w-px bg-border" />
-            <div className="flex items-center gap-3">
-              {dbStatus === 'connected' ? (
-                <div className="hidden lg:flex items-center gap-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-100 mr-2">
-                  <Cloud size={14} className="text-brand-primary" />
-                  <span className="text-[10px] font-black text-brand-primary uppercase tracking-widest leading-none">Nuvem Sincronizada</span>
+            {user && (
+              <>
+                <div className="flex items-center gap-4">
+                  <button 
+                    onClick={() => setCurrentStep('upload')}
+                    className={cn(
+                      "text-xs font-bold flex items-center gap-2 transition-colors uppercase tracking-widest px-4 py-2 rounded-lg",
+                      currentStep === 'upload' ? "bg-brand-primary/10 text-brand-primary" : "text-text-muted hover:text-brand-primary"
+                    )}
+                  >
+                    <Plus size={16} /> Novo Lote
+                  </button>
+                  <button 
+                    onClick={() => setCurrentStep('view')}
+                    className={cn(
+                      "text-xs font-bold flex items-center gap-2 transition-colors uppercase tracking-widest px-4 py-2 rounded-lg",
+                      currentStep === 'view' ? "bg-brand-primary/10 text-brand-primary" : "text-text-muted hover:text-brand-primary"
+                    )}
+                  >
+                    <Database size={16} /> Base de Dados
+                  </button>
+                  <button 
+                    onClick={() => setCurrentStep('dashboard')}
+                    className={cn(
+                      "text-xs font-bold flex items-center gap-2 transition-colors uppercase tracking-widest px-4 py-2 rounded-lg",
+                      currentStep === 'dashboard' ? "bg-brand-primary/10 text-brand-primary" : "text-text-muted hover:text-brand-primary"
+                    )}
+                  >
+                    <BarChart2 size={16} /> Dashboard
+                  </button>
                 </div>
-              ) : dbStatus === 'error' ? (
-                <button 
-                  onClick={() => setSupabaseError(true)}
-                  className="hidden lg:flex items-center gap-2 bg-red-50 px-3 py-1.5 rounded-full border border-red-100 mr-2 animate-pulse"
-                >
-                  <AlertCircle size={14} className="text-red-500" />
-                  <span className="text-[10px] font-black text-red-500 uppercase tracking-widest leading-none">Erro na Nuvem</span>
-                </button>
-              ) : (
-                <button 
-                  onClick={() => setConfigError(true)}
-                  className="hidden lg:flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200 mr-2 hover:bg-slate-100 transition-colors"
-                >
-                  <Cloud size={14} className="text-slate-400" />
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Offline</span>
-                </button>
-              )}
+                <div className="h-8 w-px bg-border" />
+                <div className="flex items-center gap-3">
+                  {dbStatus === 'connected' ? (
+                    <div className="hidden lg:flex items-center gap-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-100 mr-2">
+                      <Cloud size={14} className="text-brand-primary" />
+                      <span className="text-[10px] font-black text-brand-primary uppercase tracking-widest leading-none">Banco de Dados Conectado</span>
+                    </div>
+                  ) : dbStatus === 'error' ? (
+                    <button 
+                      onClick={() => setSupabaseError(true)}
+                      className="hidden lg:flex items-center gap-2 bg-red-50 px-3 py-1.5 rounded-full border border-red-100 mr-2 animate-pulse"
+                    >
+                      <AlertCircle size={14} className="text-red-500" />
+                      <span className="text-[10px] font-black text-red-500 uppercase tracking-widest leading-none">Erro na Nuvem</span>
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={() => setConfigError(true)}
+                      className="hidden lg:flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200 mr-2 hover:bg-slate-100 transition-colors"
+                    >
+                      <Cloud size={14} className="text-slate-400" />
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Offline</span>
+                    </button>
+                  )}
 
-              <div className="w-10 h-10 rounded-full border-2 border-brand-primary p-0.5 bg-white">
-                <div className="w-full h-full rounded-full bg-slate-100 flex items-center justify-center text-brand-primary">
-                  <CheckCircle2 size={20} />
+                  <button 
+                    onClick={() => setIsProfileOpen(true)}
+                    className="w-10 h-10 rounded-full border-2 border-brand-primary p-0.5 bg-white hover:scale-105 transition-transform cursor-pointer"
+                  >
+                    <div className="w-full h-full rounded-full bg-slate-100 flex items-center justify-center text-brand-primary overflow-hidden">
+                       {user?.user_metadata?.avatar_url ? (
+                         <img src={user.user_metadata.avatar_url} alt="User" />
+                       ) : (
+                         <CheckCircle2 size={20} />
+                       )}
+                    </div>
+                  </button>
+                  <div className="hidden sm:flex flex-col">
+                    <span className="text-xs font-black text-text-main uppercase leading-none max-w-[120px] truncate">
+                      {user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Usuário Cedro'}
+                    </span>
+                    <span className="text-[9px] text-brand-primary font-bold uppercase tracking-tighter">Sessão Iniciada</span>
+                  </div>
+                  <button 
+                    onClick={() => supabase?.auth.signOut()}
+                    className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all ml-2"
+                    title="Sair"
+                  >
+                    <LogOut size={18} />
+                  </button>
                 </div>
-              </div>
-              <div className="hidden sm:flex flex-col">
-                <span className="text-xs font-black text-text-main uppercase leading-none">Usuário Cedro</span>
-                <span className="text-[9px] text-brand-primary font-bold uppercase tracking-tighter">Conectado com Segurança</span>
-              </div>
-            </div>
+              </>
+            )}
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-8 py-12">
-        {/* Subtle Database Alert */}
-        <AnimatePresence>
+        {!user ? (
+          <Auth />
+        ) : (
+          <>
+            {/* Subtle Database Alert */}
+            <AnimatePresence>
           {configError && (
             <motion.div 
               initial={{ height: 0, opacity: 0 }}
@@ -1407,11 +1461,6 @@ NOTIFY pgrst, 'reload schema';`;
               className="space-y-12"
             >
               <div className="flex flex-col gap-3 text-center max-w-3xl mx-auto">
-
-                <h2 className="text-4xl font-black text-text-main">Converta PDF para Excel agora mesmo</h2>
-                <p className="text-text-muted text-lg font-medium opacity-80 leading-relaxed italic">
-                  Arraste seus documentos para extração imediata de peças, quantidades e valores no formato oficial Cedro.
-                </p>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
@@ -1428,8 +1477,8 @@ NOTIFY pgrst, 'reload schema';`;
                       <Upload size={32} />
                     </div>
                     <div className="text-center space-y-2">
-                       <h3 className="text-2xl font-bold text-text-main">Arraste e solte seus PDFs</h3>
-                       <p className="text-text-muted font-medium">Extraímos automaticamente Placas, OS e Valores</p>
+                       <h3 className="text-2xl font-bold text-text-main">Selecione ou arraste arquivos PDF</h3>
+                       <p className="text-text-muted font-medium">Detecção automática de Placas, OS e Valores</p>
                     </div>
                     <input 
                       id="file-input"
@@ -1486,7 +1535,7 @@ NOTIFY pgrst, 'reload schema';`;
                        <h4 className="text-xs font-black text-text-muted uppercase tracking-widest text-center">Processamento Cedro</h4>
                        <div className="space-y-4">
                          <div className="p-5 bg-green-50 border border-green-100 rounded-2xl">
-                           <p className="text-[10px] font-black text-brand-primary uppercase tracking-widest">Motor de Inteligência</p>
+                           <p className="text-[10px] font-black text-brand-primary uppercase tracking-widest">Processamento de Dados</p>
                            <p className="text-xs font-bold text-text-main mt-2 flex items-center gap-2">
                              <span className="w-2 h-2 rounded-full bg-brand-primary animate-pulse" />
                              Sistema Online & Seguro
@@ -1539,7 +1588,7 @@ NOTIFY pgrst, 'reload schema';`;
               <div className="flex flex-col gap-8">
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
                   <div className="space-y-3">
-                    <h2 className="text-4xl font-black text-text-main">Gestão Estratégica</h2>
+                    <h2 className="text-4xl font-black text-text-main">Indicadores Operacionais</h2>
                   </div>
                   <div className="flex gap-4">
                     <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center min-w-[120px]">
@@ -1564,7 +1613,7 @@ NOTIFY pgrst, 'reload schema';`;
                       <Search size={18} />
                     </div>
                     <div className="space-y-1">
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Filtrar por Placa</p>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Busca por Placa</p>
                       <input 
                         type="text"
                         placeholder="ABC-1234..."
@@ -1572,6 +1621,30 @@ NOTIFY pgrst, 'reload schema';`;
                         onChange={(e) => setFilterPlate(e.target.value)}
                         className="bg-transparent border-none p-0 focus:ring-0 text-sm font-bold text-text-main placeholder:text-slate-200 w-32"
                       />
+                    </div>
+                  </div>
+
+                  <div className="h-10 w-px bg-slate-100" />
+
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
+                      <Truck size={18} />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Selecionar Placa</p>
+                      <select 
+                        value={filterPlate}
+                        onChange={(e) => setFilterPlate(e.target.value)}
+                        className="bg-transparent border-none p-0 focus:ring-0 text-sm font-bold text-text-main appearance-none cursor-pointer pr-6"
+                      >
+                        <option value="">Todas as Placas</option>
+                        {Array.from(new Set(extractedData.map(d => d.placa).filter(Boolean)))
+                          .sort()
+                          .map(plate => (
+                            <option key={plate} value={plate || ''}>{plate}</option>
+                          ))
+                        }
+                      </select>
                     </div>
                   </div>
 
@@ -1888,15 +1961,26 @@ NOTIFY pgrst, 'reload schema';`;
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2 flex items-center gap-2">
-                      <Activity size={12} /> Placa/Moto
+                      <Truck size={12} /> Selecionar Placa
                     </label>
-                    <input 
-                      type="text" 
-                      placeholder="Ex: ABC1234"
-                      value={filterPlate}
-                      onChange={(e) => setFilterPlate(e.target.value)}
-                      className="w-full h-12 px-6 bg-white border border-border rounded-xl text-sm font-bold focus:ring-2 focus:ring-brand-primary focus:outline-none transition-all shadow-sm"
-                    />
+                    <div className="relative">
+                      <select 
+                        value={filterPlate}
+                        onChange={(e) => setFilterPlate(e.target.value)}
+                        className="w-full h-12 px-6 bg-white border border-border rounded-xl text-sm font-bold focus:ring-2 focus:ring-brand-primary focus:outline-none transition-all shadow-sm appearance-none cursor-pointer pr-10"
+                      >
+                        <option value="">Todas as Placas</option>
+                        {Array.from(new Set(extractedData.map(d => d.placa).filter(Boolean)))
+                          .sort()
+                          .map(plate => (
+                            <option key={plate} value={plate || ''}>{plate}</option>
+                          ))
+                        }
+                      </select>
+                      <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                        <ChevronDown size={14} />
+                      </div>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2 flex items-center gap-2">
@@ -2036,7 +2120,9 @@ NOTIFY pgrst, 'reload schema';`;
             </motion.div>
           )}
         </AnimatePresence>
-      </main>
+      </>
+    )}
+</main>
       
       {/* Clean Modern Footer */}
       <footer className="max-w-7xl mx-auto px-8 py-12 mt-20 border-t border-slate-100">
@@ -2059,6 +2145,12 @@ NOTIFY pgrst, 'reload schema';`;
           </div>
         </div>
       </footer>
+
+      <ProfileSidebar 
+        isOpen={isProfileOpen} 
+        onClose={() => setIsProfileOpen(false)} 
+        user={user} 
+      />
     </div>
   );
 }
